@@ -1,21 +1,15 @@
 import streamlit as st
 import pandas as pd
-import os
 from datetime import datetime
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Border, Side
 from openpyxl.utils import get_column_letter
 import io
+import os
 
 # Initialize session state for tracking processing status
 if "processing_complete" not in st.session_state:
     st.session_state.processing_complete = False
-
-
-def load_excel_with_formatting(file_path):
-    """Load Excel file while preserving formatting"""
-    wb = openpyxl.load_workbook(file_path, data_only=False)
-    return wb
 
 
 def copy_cell_formatting(source_cell, target_cell):
@@ -44,10 +38,8 @@ def copy_cell_formatting(source_cell, target_cell):
 def adjust_formula_row(formula, row_diff):
     """Adjust formula references for new row"""
     new_formula = formula
-    # Find all cell references in the formula and adjust them
     import re
 
-    # Match patterns like A1, B2, AA12, etc.
     cell_refs = re.findall(r"([A-Z]+)(\d+)", formula)
     for col, row in cell_refs:
         old_ref = f"{col}{row}"
@@ -67,16 +59,14 @@ def copy_formulas(template_ws, source_row, target_row):
             target_cell.value = adjusted_formula
 
 
-def process_profile_data(uploaded_profile_df, template_path):
+def process_profile_data(uploaded_profile_df, template_file):
     """Process profile data and update template"""
-    # Load template workbook
-    template_files = [f for f in os.listdir(template_path) if "ProfileData" in f]
-    if not template_files:
-        st.error("No ProfileData template found in the specified directory")
-        return None
+    # Handle both file object and file path
+    if isinstance(template_file, str):
+        template_wb = openpyxl.load_workbook(template_file)
+    else:
+        template_wb = openpyxl.load_workbook(template_file)
 
-    template_file = os.path.join(template_path, template_files[0])
-    template_wb = load_excel_with_formatting(template_file)
     template_ws = template_wb.active
 
     # Get existing records in template
@@ -107,21 +97,19 @@ def process_profile_data(uploaded_profile_df, template_path):
     return template_wb
 
 
-def process_audit_data(uploaded_audit_df, template_path):
+def process_audit_data(uploaded_audit_df, template_file):
     """Process audit data and update template"""
-    # Load template workbook
-    template_files = [f for f in os.listdir(template_path) if "AuditData" in f]
-    if not template_files:
-        st.error("No AuditData template found in the specified directory")
-        return None
+    # Handle both file object and file path
+    if isinstance(template_file, str):
+        template_wb = openpyxl.load_workbook(template_file)
+    else:
+        template_wb = openpyxl.load_workbook(template_file)
 
-    template_file = os.path.join(template_path, template_files[0])
-    template_wb = load_excel_with_formatting(template_file)
     template_ws = template_wb.active
 
     # Get headers from template
     template_headers = {}
-    formula_columns = set()  # Track columns with formulas
+    formula_columns = set()
 
     # Identify columns with formulas in the first data row
     first_data_row = 2
@@ -172,42 +160,91 @@ def refresh_app():
     st.experimental_rerun()
 
 
+def validate_file_path(file_path):
+    """Validate if a file path exists and is accessible"""
+    if not file_path:
+        return False
+    return os.path.exists(file_path) and os.path.isfile(file_path)
+
+
 def main():
     st.title("Profile and Audit Data Update")
 
     if not st.session_state.processing_complete:
-        # File uploads
-        profile_file = st.file_uploader("Upload Profile Data (CSV)", type=["csv"])
-        audit_file = st.file_uploader("Upload Audit Data (XLSX)", type=["xlsx"])
+        # Add tabs for different input methods
+        input_method = st.radio("Choose input method:", ["File Upload", "File Paths"])
 
-        # Directory inputs
-        database_dir = st.text_input("Enter Database Directory Path")
-        template_dir = st.text_input("Enter Template Directory Path")
+        if input_method == "File Upload":
+            # File uploads
+            profile_file = st.file_uploader("Upload Profile Data (CSV)", type=["csv"])
+            audit_file = st.file_uploader("Upload Audit Data (XLSX)", type=["xlsx"])
+            profile_template = st.file_uploader(
+                "Upload Profile Template (XLSX)", type=["xlsx"], key="profile_template"
+            )
+            audit_template = st.file_uploader(
+                "Upload Audit Template (XLSX)", type=["xlsx"], key="audit_template"
+            )
 
-        if (
-            st.button("Process Files")
-            and profile_file
-            and audit_file
-            and database_dir
-            and template_dir
-        ):
+            files_ready = all(
+                [profile_file, audit_file, profile_template, audit_template]
+            )
+
+        else:  # File Paths
+            # File path inputs
+            profile_path = st.text_input("Profile Data Path (CSV):")
+            audit_path = st.text_input("Audit Data Path (XLSX):")
+            profile_template_path = st.text_input("Profile Template Path (XLSX):")
+            audit_template_path = st.text_input("Audit Template Path (XLSX):")
+
+            # Validate paths
+            paths_valid = all(
+                validate_file_path(path)
+                for path in [
+                    profile_path,
+                    audit_path,
+                    profile_template_path,
+                    audit_template_path,
+                ]
+                if path
+            )
+
+            if not paths_valid and any(
+                [profile_path, audit_path, profile_template_path, audit_template_path]
+            ):
+                st.warning("One or more file paths are invalid or inaccessible.")
+
+            files_ready = paths_valid and all(
+                [profile_path, audit_path, profile_template_path, audit_template_path]
+            )
+
+        if st.button("Process Files") and files_ready:
             try:
-                # Read uploaded files
-                profile_df = pd.read_csv(profile_file)
-                audit_df = pd.read_excel(audit_file)
+                # Read files based on input method
+                if input_method == "File Upload":
+                    profile_df = pd.read_csv(profile_file)
+                    audit_df = pd.read_excel(audit_file)
+                    profile_template_data = profile_template
+                    audit_template_data = audit_template
+                else:
+                    profile_df = pd.read_csv(profile_path)
+                    audit_df = pd.read_excel(audit_path)
+                    profile_template_data = profile_template_path
+                    audit_template_data = audit_template_path
 
                 # Store processed data in session state
                 st.session_state.profile_buffer = io.BytesIO()
                 st.session_state.audit_buffer = io.BytesIO()
 
                 # Process Profile Data
-                processed_profile = process_profile_data(profile_df, template_dir)
+                processed_profile = process_profile_data(
+                    profile_df, profile_template_data
+                )
                 if processed_profile:
                     processed_profile.save(st.session_state.profile_buffer)
                     st.session_state.profile_buffer.seek(0)
 
                 # Process Audit Data
-                processed_audit = process_audit_data(audit_df, template_dir)
+                processed_audit = process_audit_data(audit_df, audit_template_data)
                 if processed_audit:
                     processed_audit.save(st.session_state.audit_buffer)
                     st.session_state.audit_buffer.seek(0)
