@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import os
 from datetime import datetime
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Border, Side
@@ -9,6 +10,13 @@ import io
 # Initialize session state for tracking processing status
 if "processing_complete" not in st.session_state:
     st.session_state.processing_complete = False
+
+
+def load_excel_with_formatting(file_path):
+    """Load Excel file while preserving formatting"""
+    wb = openpyxl.load_workbook(file_path, data_only=False)
+    return wb
+
 
 def copy_cell_formatting(source_cell, target_cell):
     """Copy formatting from source cell to target cell"""
@@ -32,10 +40,14 @@ def copy_cell_formatting(source_cell, target_cell):
             bottom=Side(border_style=source_cell.border.bottom.style),
         )
 
+
 def adjust_formula_row(formula, row_diff):
     """Adjust formula references for new row"""
     new_formula = formula
+    # Find all cell references in the formula and adjust them
     import re
+
+    # Match patterns like A1, B2, AA12, etc.
     cell_refs = re.findall(r"([A-Z]+)(\d+)", formula)
     for col, row in cell_refs:
         old_ref = f"{col}{row}"
@@ -43,6 +55,7 @@ def adjust_formula_row(formula, row_diff):
         new_ref = f"{col}{new_row}"
         new_formula = new_formula.replace(old_ref, new_ref)
     return new_formula
+
 
 def copy_formulas(template_ws, source_row, target_row):
     """Copy formulas from source row to target row, adjusting cell references"""
@@ -53,14 +66,24 @@ def copy_formulas(template_ws, source_row, target_row):
             adjusted_formula = adjust_formula_row(cell.value, row_diff)
             target_cell.value = adjusted_formula
 
-def process_profile_data(uploaded_profile_df, template_file):
+
+def process_profile_data(uploaded_profile_df, template_path):
     """Process profile data and update template"""
-    template_wb = openpyxl.load_workbook(template_file)
+    # Load template workbook
+    template_files = [f for f in os.listdir(template_path) if "ProfileData" in f]
+    if not template_files:
+        st.error("No ProfileData template found in the specified directory")
+        return None
+
+    template_file = os.path.join(template_path, template_files[0])
+    template_wb = load_excel_with_formatting(template_file)
     template_ws = template_wb.active
 
     # Get existing records in template
     existing_records = set()
-    for row in template_ws.iter_rows(min_row=2, max_row=template_ws.max_row, min_col=1, max_col=1):
+    for row in template_ws.iter_rows(
+        min_row=2, max_row=template_ws.max_row, min_col=1, max_col=1
+    ):
         if row[0].value:
             existing_records.add(str(row[0].value))
 
@@ -83,14 +106,22 @@ def process_profile_data(uploaded_profile_df, template_file):
 
     return template_wb
 
-def process_audit_data(uploaded_audit_df, template_file):
+
+def process_audit_data(uploaded_audit_df, template_path):
     """Process audit data and update template"""
-    template_wb = openpyxl.load_workbook(template_file)
+    # Load template workbook
+    template_files = [f for f in os.listdir(template_path) if "AuditData" in f]
+    if not template_files:
+        st.error("No AuditData template found in the specified directory")
+        return None
+
+    template_file = os.path.join(template_path, template_files[0])
+    template_wb = load_excel_with_formatting(template_file)
     template_ws = template_wb.active
 
     # Get headers from template
     template_headers = {}
-    formula_columns = set()
+    formula_columns = set()  # Track columns with formulas
 
     # Identify columns with formulas in the first data row
     first_data_row = 2
@@ -104,7 +135,9 @@ def process_audit_data(uploaded_audit_df, template_file):
 
     # Get existing records in template
     existing_records = set()
-    for row in template_ws.iter_rows(min_row=2, max_row=template_ws.max_row, min_col=1, max_col=1):
+    for row in template_ws.iter_rows(
+        min_row=2, max_row=template_ws.max_row, min_col=1, max_col=1
+    ):
         if row[0].value:
             existing_records.add(str(row[0].value))
 
@@ -121,7 +154,9 @@ def process_audit_data(uploaded_audit_df, template_file):
                         cell = template_ws.cell(row=new_row, column=template_col)
                         cell.value = value
                         # Copy formatting from the row above
-                        source_cell = template_ws.cell(row=new_row - 1, column=template_col)
+                        source_cell = template_ws.cell(
+                            row=new_row - 1, column=template_col
+                        )
                         copy_cell_formatting(source_cell, cell)
 
             # Copy formulas from previous row
@@ -130,24 +165,32 @@ def process_audit_data(uploaded_audit_df, template_file):
 
     return template_wb
 
+
 def refresh_app():
     """Reset the app state"""
     st.session_state.processing_complete = False
     st.experimental_rerun()
 
+
 def main():
     st.title("Profile and Audit Data Update")
-    
+
     if not st.session_state.processing_complete:
         # File uploads
         profile_file = st.file_uploader("Upload Profile Data (CSV)", type=["csv"])
         audit_file = st.file_uploader("Upload Audit Data (XLSX)", type=["xlsx"])
-        
-        # Template file uploads instead of directory paths
-        profile_template = st.file_uploader("Upload Profile Template (XLSX)", type=["xlsx"], key="profile_template")
-        audit_template = st.file_uploader("Upload Audit Template (XLSX)", type=["xlsx"], key="audit_template")
 
-        if st.button("Process Files") and all([profile_file, audit_file, profile_template, audit_template]):
+        # Directory inputs
+        database_dir = st.text_input("Enter Database Directory Path")
+        template_dir = st.text_input("Enter Template Directory Path")
+
+        if (
+            st.button("Process Files")
+            and profile_file
+            and audit_file
+            and database_dir
+            and template_dir
+        ):
             try:
                 # Read uploaded files
                 profile_df = pd.read_csv(profile_file)
@@ -158,13 +201,13 @@ def main():
                 st.session_state.audit_buffer = io.BytesIO()
 
                 # Process Profile Data
-                processed_profile = process_profile_data(profile_df, profile_template)
+                processed_profile = process_profile_data(profile_df, template_dir)
                 if processed_profile:
                     processed_profile.save(st.session_state.profile_buffer)
                     st.session_state.profile_buffer.seek(0)
 
                 # Process Audit Data
-                processed_audit = process_audit_data(audit_df, audit_template)
+                processed_audit = process_audit_data(audit_df, template_dir)
                 if processed_audit:
                     processed_audit.save(st.session_state.audit_buffer)
                     st.session_state.audit_buffer.seek(0)
@@ -200,6 +243,7 @@ def main():
 
         # Add refresh button at the bottom
         st.button("Start Fresh Update", on_click=refresh_app)
+
 
 if __name__ == "__main__":
     main()
